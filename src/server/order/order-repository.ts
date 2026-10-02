@@ -234,7 +234,11 @@ export async function transitionOrder(input: TransitionOrderInput): Promise<Tran
 
     const existingEvent = await findOrderEventByKey(client, input.orderId, input.idempotencyKey);
     if (existingEvent) {
-      if (existingEvent.to_status !== input.toStatus || existingEvent.reason !== input.reason) {
+      const storedMetadata = { ...existingEvent.metadata };
+      delete storedMetadata.requestId;
+      if (existingEvent.to_status !== input.toStatus
+        || existingEvent.reason !== input.reason
+        || stableJson(storedMetadata) !== stableJson(input.metadata)) {
         throw new OrderIdempotencyConflictError();
       }
       return {
