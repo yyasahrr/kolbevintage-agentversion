@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { query } from "@/server/db/pool";
 import { withTransaction } from "@/server/db/transaction";
@@ -17,8 +17,10 @@ import type {
   InspectInventoryReceiptInput,
   PlaceInventoryHoldInput,
   ReceiveInventoryInput,
+  ReleaseInventoryBatchInput,
   ReleaseInventoryHoldInput,
   ReleaseInventoryInput,
+  ReserveInventoryBatchInput,
   ReserveInventoryInput,
   TransferInventoryInput,
 } from "@/server/inventory/validation";
@@ -55,6 +57,7 @@ export type InventoryReservation = {
   quantity: number;
   status: "active" | "released" | "consumed" | "cancelled";
   idempotencyKey: string;
+  batchId: string | null;
 };
 
 export type InventoryReceipt = {
@@ -120,6 +123,18 @@ type ReservationRow = {
   quantity: number;
   status: InventoryReservation["status"];
   idempotency_key: string;
+  reservation_batch_id: string | null;
+};
+
+type ReservationBatchRow = {
+  id: string;
+  idempotency_key: string;
+  reference_type: string | null;
+  reference_id: string | null;
+  command_fingerprint: string;
+  status: "active" | "released";
+  release_idempotency_key: string | null;
+  release_command_fingerprint: string | null;
 };
 
 export type InboundShipmentItem = {
@@ -146,6 +161,14 @@ export type InventoryTransferResult = {
   idempotentReplay: boolean;
   sourceBalance: InventoryBalance;
   destinationBalance: InventoryBalance;
+  movements: InventoryMovement[];
+};
+
+export type InventoryReservationBatchResult = {
+  batchId: string;
+  status: "active" | "released";
+  idempotentReplay: boolean;
+  reservations: InventoryReservation[];
   movements: InventoryMovement[];
 };
 
@@ -848,6 +871,293 @@ export async function inspectInventoryReceipt(input: InspectInventoryReceiptInpu
 
     return buildResult(movements, null, nextBalance, false, updatedReceipt);
   });
+}
+
+export async function reserveInventoryBatch(
+  input: ReserveInventoryBatchInput,
+): Promise<InventoryReservationBatchResult> {
+  return withTransaction((client) => reserveInventoryBatchWithClient(client, input));
+}
+
+export async function reserveInventoryBatchWithClient(
+  client: PoolClient,
+  input: ReserveInventoryBatchInput,
+): Promise<InventoryReservationBatchResult> {
+  const fingerprint = reservationBatchFingerprint(input);
+  await lockCommand(client, `inventory:reserve-batch:${input.idempotencyKey}`);
+  const existingBatch = await findReservationBatchByIdempotencyKey(client, input.idempotencyKey, true);
+  if (existingBatch) {
+    if (existingBatch.command_fingerprint !== fingerprint) {
+      throw new InventoryIdempotencyConflictError();
+    }
+    const reservations = await findBatchReservations(client, existingBatch.id, false);
+    const movements = await findMovements(
+      client,
+      reservations.map((reservation) => batchReservationMovementKey(reservation.idempotency_key)),
+    );
+    if (reservations.length !== input.lines.length || movements.length !== input.lines.length) {
+      throw new InventoryIntegrityError();
+    }
+    return {
+      batchId: existingBatch.id,
+      status: existingBatch.status,
+      idempotentReplay: true,
+      reservations: reservations.map(toReservation),
+      movements: movements.map(toMovement),
+    };
+  }
+
+  const batch = await insertReservationBatch(client, input, fingerprint);
+  const sortedLines = [...input.lines].sort((a, b) => reservationBalanceKey(a).localeCompare(reservationBalanceKey(b)));
+  const reservations: ReservationRow[] = [];
+  const movements: MovementRow[] = [];
+
+  for (const line of sortedLines) {
+    const context = await loadContext(client, line.variantId, line.locationId);
+    assertSource(context, line.sourceSupplierId);
+    const balance = await lockOrCreateBalance(client, context, line.locationId, line.sourceSupplierId);
+    if (context.productStatus !== "active" || (context.ownerType === "supplier" && context.supplierStatus !== "approved")) {
+      throw new InventoryNotAvailableError();
+    }
+
+    const available = balance.on_hand_quantity - balance.reserved_quantity - balance.unavailable_quantity;
+    if (available < line.quantity) {
+      throw new InventoryInsufficientError(line.quantity, available);
+    }
+    const nextBalance = assertBalance({
+      onHandQuantity: balance.on_hand_quantity,
+      reservedQuantity: balance.reserved_quantity + line.quantity,
+      unavailableQuantity: balance.unavailable_quantity,
+    });
+    const reservationKey = batchReservationKey(batch.id, line);
+    const movement = await insertMovement(client, {
+      productId: context.productId,
+      variantId: context.variantId,
+      locationId: line.locationId,
+      sourceSupplierId: line.sourceSupplierId,
+      movementType: "reserve",
+      quantityDelta: 0,
+      reservedDelta: line.quantity,
+      unavailableDelta: 0,
+      balance: nextBalance,
+      idempotencyKey: batchReservationMovementKey(reservationKey),
+      actorUserId: input.actorUserId,
+      reason: input.reason,
+      referenceType: input.referenceType ?? null,
+      referenceId: input.referenceId ?? null,
+      requestId: input.requestId,
+    });
+    await updateBalance(client, balance.id, nextBalance);
+    const reservation = await insertReservation(client, {
+      productId: context.productId,
+      variantId: context.variantId,
+      locationId: line.locationId,
+      sourceSupplierId: line.sourceSupplierId,
+      quantity: line.quantity,
+      idempotencyKey: reservationKey,
+      referenceType: input.referenceType ?? null,
+      referenceId: input.referenceId ?? null,
+      actorUserId: input.actorUserId,
+      reservationBatchId: batch.id,
+    });
+    await appendInventoryAudit(client, {
+      actorUserId: input.actorUserId,
+      action: "inventory.reservation_batch_created",
+      resourceType: "inventory_reservation_batch",
+      resourceId: batch.id,
+      reason: input.reason,
+      requestId: input.requestId,
+      afterState: nextBalance,
+    });
+    reservations.push(reservation);
+    movements.push(movement);
+  }
+
+  return {
+    batchId: batch.id,
+    status: "active",
+    idempotentReplay: false,
+    reservations: reservations.map(toReservation),
+    movements: movements.map(toMovement),
+  };
+}
+
+export async function releaseInventoryBatch(
+  input: ReleaseInventoryBatchInput,
+): Promise<InventoryReservationBatchResult> {
+  return withTransaction((client) => releaseInventoryBatchWithClient(client, input));
+}
+
+export async function releaseInventoryBatchWithClient(
+  client: PoolClient,
+  input: ReleaseInventoryBatchInput,
+): Promise<InventoryReservationBatchResult> {
+  const releaseFingerprint = reservationReleaseFingerprint(input);
+  await lockCommand(client, `inventory:release-batch-command:${input.idempotencyKey}`);
+  const existingRelease = await findReservationBatchByReleaseKey(client, input.idempotencyKey);
+  if (existingRelease && existingRelease.id !== input.batchId) {
+    throw new InventoryIdempotencyConflictError();
+  }
+  const batch = await findReservationBatchById(client, input.batchId, true);
+  if (!batch) {
+    throw new InventoryNotFoundError();
+  }
+  if (batch.release_idempotency_key && batch.release_idempotency_key !== input.idempotencyKey) {
+    throw new InventoryIdempotencyConflictError();
+  }
+  if (batch.status === "released") {
+    if (batch.release_idempotency_key !== input.idempotencyKey
+      || batch.release_command_fingerprint !== releaseFingerprint) {
+      throw new InventoryIdempotencyConflictError();
+    }
+    const reservations = await findBatchReservations(client, batch.id, false);
+    const movements = await findMovements(
+      client,
+      reservations.map((reservation) => batchReleaseMovementKey(batch.id, reservation.idempotency_key)),
+    );
+    if (movements.length !== reservations.length) throw new InventoryIntegrityError();
+    return {
+      batchId: batch.id,
+      status: "released",
+      idempotentReplay: true,
+      reservations: reservations.map(toReservation),
+      movements: movements.map(toMovement),
+    };
+  }
+
+  const reservations = await findBatchReservations(client, batch.id, true);
+  if (reservations.some((reservation) => reservation.status !== "active")) {
+    throw new InventoryIntegrityError();
+  }
+  const sortedReservations = [...reservations].sort((a, b) => reservationBalanceKey({
+    variantId: a.variant_id,
+    locationId: a.location_id,
+    sourceSupplierId: a.source_supplier_id,
+  }).localeCompare(reservationBalanceKey({
+    variantId: b.variant_id,
+    locationId: b.location_id,
+    sourceSupplierId: b.source_supplier_id,
+  })));
+  const movements: MovementRow[] = [];
+  for (const reservation of sortedReservations) {
+    const context = await loadContext(client, reservation.variant_id, reservation.location_id);
+    assertSource(context, reservation.source_supplier_id);
+    const balance = await lockOrCreateBalance(
+      client,
+      context,
+      reservation.location_id,
+      reservation.source_supplier_id,
+    );
+    if (balance.reserved_quantity < reservation.quantity) {
+      throw new InventoryIntegrityError();
+    }
+    const nextBalance = assertBalance({
+      onHandQuantity: balance.on_hand_quantity,
+      reservedQuantity: balance.reserved_quantity - reservation.quantity,
+      unavailableQuantity: balance.unavailable_quantity,
+    });
+    await updateBalance(client, balance.id, nextBalance);
+    const movement = await insertMovement(client, {
+      productId: context.productId,
+      variantId: context.variantId,
+      locationId: reservation.location_id,
+      sourceSupplierId: reservation.source_supplier_id,
+      movementType: "release",
+      quantityDelta: 0,
+      reservedDelta: -reservation.quantity,
+      unavailableDelta: 0,
+      balance: nextBalance,
+      idempotencyKey: batchReleaseMovementKey(batch.id, reservation.idempotency_key),
+      actorUserId: input.actorUserId,
+      reason: input.reason ?? "Inventory reservation batch released",
+      referenceType: batch.reference_type ?? "inventory_reservation_batch",
+      referenceId: batch.reference_id ?? batch.id,
+      requestId: input.requestId,
+    });
+    movements.push(movement);
+  }
+
+  await client.query(
+    `UPDATE inventory_reservations
+        SET status = 'released', released_at = now(), updated_at = now()
+      WHERE reservation_batch_id = $1 AND status = 'active'`,
+    [batch.id],
+  );
+  await client.query(
+    `UPDATE inventory_reservation_batches
+        SET status = 'released', release_idempotency_key = $2,
+            release_command_fingerprint = $3,
+            released_by = $4, released_at = now(), updated_at = now()
+      WHERE id = $1 AND status = 'active'`,
+    [batch.id, input.idempotencyKey, releaseFingerprint, input.actorUserId],
+  );
+  await appendInventoryAudit(client, {
+    actorUserId: input.actorUserId,
+    action: "inventory.reservation_batch_released",
+    resourceType: "inventory_reservation_batch",
+    resourceId: batch.id,
+    reason: input.reason ?? "Inventory reservation batch released",
+    requestId: input.requestId,
+    afterState: { status: "released", reservationCount: reservations.length },
+  });
+
+  const releasedReservations = await findBatchReservations(client, batch.id, false);
+  return {
+    batchId: batch.id,
+    status: "released",
+    idempotentReplay: false,
+    reservations: releasedReservations.map(toReservation),
+    movements: movements.map(toMovement),
+  };
+}
+
+function reservationBatchFingerprint(input: ReserveInventoryBatchInput): string {
+  const lines = [...input.lines]
+    .map((line) => ({
+      variantId: line.variantId,
+      locationId: line.locationId,
+      sourceSupplierId: line.sourceSupplierId,
+      lineReference: line.lineReference,
+      quantity: line.quantity,
+    }))
+    .sort((a, b) => reservationBalanceKey(a).localeCompare(reservationBalanceKey(b)));
+  return createHash("sha256").update(JSON.stringify({
+    referenceType: input.referenceType ?? null,
+    referenceId: input.referenceId ?? null,
+    reason: input.reason,
+    lines,
+  })).digest("hex");
+}
+
+function reservationReleaseFingerprint(input: ReleaseInventoryBatchInput): string {
+  return createHash("sha256").update(JSON.stringify({
+    batchId: input.batchId,
+    reason: input.reason ?? null,
+  })).digest("hex");
+}
+
+function reservationBalanceKey(input: {
+  variantId: string;
+  locationId: string;
+  sourceSupplierId: string | null;
+}): string {
+  return `${input.variantId}:${input.locationId}:${input.sourceSupplierId ?? "platform"}`;
+}
+
+function batchReservationKey(batchId: string, line: {
+  variantId: string;
+  locationId: string;
+  sourceSupplierId: string | null;
+}): string {
+  return `inventory:reserve-batch:${batchId}:${reservationBalanceKey(line)}`;
+}
+
+function batchReservationMovementKey(reservationKey: string): string {
+  return `${reservationKey}:movement`;
+}
+
+function batchReleaseMovementKey(batchId: string, reservationKey: string): string {
+  return `inventory:release-batch:${batchId}:${reservationKey}`;
 }
 
 export async function reserveInventory(input: ReserveInventoryInput): Promise<InventoryOperationResult> {
@@ -1621,10 +1931,106 @@ async function updateHoldReleased(client: PoolClient, holdId: string, input: Rel
   return result.rows[0];
 }
 
+async function findReservationBatchByIdempotencyKey(
+  client: PoolClient,
+  idempotencyKey: string,
+  lock: boolean,
+): Promise<ReservationBatchRow | null> {
+  const result = await client.query<ReservationBatchRow>(
+    `SELECT id, idempotency_key, reference_type, reference_id,
+            command_fingerprint, status, release_idempotency_key,
+            release_command_fingerprint
+       FROM inventory_reservation_batches
+      WHERE idempotency_key = $1
+      LIMIT 1
+      ${lock ? "FOR UPDATE" : ""}`,
+    [idempotencyKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findReservationBatchById(
+  client: PoolClient,
+  batchId: string,
+  lock: boolean,
+): Promise<ReservationBatchRow | null> {
+  const result = await client.query<ReservationBatchRow>(
+    `SELECT id, idempotency_key, reference_type, reference_id,
+            command_fingerprint, status, release_idempotency_key,
+            release_command_fingerprint
+       FROM inventory_reservation_batches
+      WHERE id = $1
+      LIMIT 1
+      ${lock ? "FOR UPDATE" : ""}`,
+    [batchId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findReservationBatchByReleaseKey(
+  client: PoolClient,
+  releaseIdempotencyKey: string,
+): Promise<ReservationBatchRow | null> {
+  const result = await client.query<ReservationBatchRow>(
+    `SELECT id, idempotency_key, reference_type, reference_id,
+            command_fingerprint, status, release_idempotency_key,
+            release_command_fingerprint
+       FROM inventory_reservation_batches
+      WHERE release_idempotency_key = $1
+      LIMIT 1
+      FOR UPDATE`,
+    [releaseIdempotencyKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function insertReservationBatch(
+  client: PoolClient,
+  input: ReserveInventoryBatchInput,
+  fingerprint: string,
+): Promise<ReservationBatchRow> {
+  const result = await client.query<ReservationBatchRow>(
+    `INSERT INTO inventory_reservation_batches
+       (id, idempotency_key, reference_type, reference_id,
+        command_fingerprint, actor_user_id, reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, idempotency_key, reference_type, reference_id,
+       command_fingerprint, status, release_idempotency_key, release_command_fingerprint`,
+    [
+      randomUUID(),
+      input.idempotencyKey,
+      input.referenceType ?? null,
+      input.referenceId ?? null,
+      fingerprint,
+      input.actorUserId,
+      input.reason,
+    ],
+  );
+  if (!result.rows[0]) throw new InventoryIntegrityError();
+  return result.rows[0];
+}
+
+async function findBatchReservations(
+  client: PoolClient,
+  batchId: string,
+  lock: boolean,
+): Promise<ReservationRow[]> {
+  const result = await client.query<ReservationRow>(
+    `SELECT id, product_id, variant_id, location_id, source_supplier_id,
+            quantity, status, idempotency_key, reservation_batch_id
+       FROM inventory_reservations
+      WHERE reservation_batch_id = $1
+      ORDER BY variant_id, location_id, source_supplier_id NULLS FIRST, id
+      ${lock ? "FOR UPDATE" : ""}`,
+    [batchId],
+  );
+  return result.rows;
+}
+
 async function findReservation(client: PoolClient, idempotencyKey: string): Promise<ReservationRow | null> {
   const result = await client.query<ReservationRow>(
     `SELECT id, product_id, variant_id, location_id, source_supplier_id,
-            quantity, status, idempotency_key
+            quantity, status, idempotency_key, reservation_batch_id
        FROM inventory_reservations
       WHERE idempotency_key = $1
       LIMIT 1
@@ -1641,7 +2047,7 @@ async function findReservationById(
 ): Promise<ReservationRow | null> {
   const result = await client.query<ReservationRow>(
     `SELECT id, product_id, variant_id, location_id, source_supplier_id,
-            quantity, status, idempotency_key
+            quantity, status, idempotency_key, reservation_batch_id
        FROM inventory_reservations
       WHERE id = $1
       LIMIT 1
@@ -1681,15 +2087,16 @@ async function insertReservation(
     referenceType: string | null;
     referenceId: string | null;
     actorUserId: string;
+    reservationBatchId?: string | null;
   },
 ): Promise<ReservationRow> {
   const result = await client.query<ReservationRow>(
     `INSERT INTO inventory_reservations
        (id, product_id, variant_id, location_id, source_supplier_id,
-        quantity, idempotency_key, reference_type, reference_id, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        quantity, idempotency_key, reference_type, reference_id, created_by, reservation_batch_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING id, product_id, variant_id, location_id, source_supplier_id,
-       quantity, status, idempotency_key`,
+       quantity, status, idempotency_key, reservation_batch_id`,
     [
       randomUUID(),
       input.productId,
@@ -1701,6 +2108,7 @@ async function insertReservation(
       input.referenceType,
       input.referenceId,
       input.actorUserId,
+      input.reservationBatchId ?? null,
     ],
   );
   return result.rows[0];
@@ -1742,7 +2150,7 @@ async function appendInventoryAudit(
     resourceId: string;
     reason: string | null;
     requestId: string;
-    afterState: InventoryBalance;
+    afterState: InventoryBalance | Record<string, unknown>;
   },
 ): Promise<void> {
   await client.query(
@@ -1801,6 +2209,7 @@ function toReservation(row: ReservationRow): InventoryReservation {
     quantity: row.quantity,
     status: row.status,
     idempotencyKey: row.idempotency_key,
+    batchId: row.reservation_batch_id,
   };
 }
 

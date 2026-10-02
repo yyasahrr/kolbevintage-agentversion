@@ -24,6 +24,35 @@ export const reserveInventorySchema = z.object({
   referenceId: z.string().trim().min(1).max(200).nullable().optional(),
 });
 
+export const reserveInventoryBatchSchema = z.object({
+  idempotencyKey,
+  referenceType: z.string().trim().min(1).max(80).nullable().optional(),
+  referenceId: z.string().trim().min(1).max(200).nullable().optional(),
+  reason: z.string().trim().min(1).max(1000),
+  lines: z.array(z.object({
+    variantId: uuid,
+    locationId: uuid,
+    sourceSupplierId: uuid.nullable(),
+    lineReference: z.string().trim().min(1).max(200).nullable().default(null),
+    quantity,
+  })).min(1).max(100).superRefine((lines, context) => {
+    const keys = new Set<string>();
+    for (const line of lines) {
+      const key = `${line.variantId}:${line.locationId}:${line.sourceSupplierId ?? "platform"}`;
+      if (keys.has(key)) {
+        context.addIssue({ code: "custom", message: "Each inventory balance may appear only once per batch." });
+      }
+      keys.add(key);
+    }
+  }),
+});
+
+export const releaseInventoryBatchSchema = z.object({
+  batchId: uuid,
+  idempotencyKey,
+  reason: z.string().trim().min(1).max(1000).nullable().optional(),
+});
+
 export const createInboundShipmentSchema = z.object({
   sourceSupplierId: uuid.nullable().default(null),
   referenceCode: z.string().trim().min(1).max(120),
@@ -99,6 +128,16 @@ export type ReceiveInventoryInput = z.infer<typeof receiveInventorySchema> & {
 };
 
 export type ReserveInventoryInput = z.infer<typeof reserveInventorySchema> & {
+  actorUserId: string;
+  requestId: string;
+};
+
+export type ReserveInventoryBatchInput = z.infer<typeof reserveInventoryBatchSchema> & {
+  actorUserId: string;
+  requestId: string;
+};
+
+export type ReleaseInventoryBatchInput = z.infer<typeof releaseInventoryBatchSchema> & {
   actorUserId: string;
   requestId: string;
 };

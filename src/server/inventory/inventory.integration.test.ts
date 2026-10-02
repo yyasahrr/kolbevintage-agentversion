@@ -11,8 +11,10 @@ import {
   placeInventoryHold,
   receiveInventory,
   releaseInventoryHold,
+  releaseInventoryBatch,
   releaseInventoryReservation,
   reserveInventory,
+  reserveInventoryBatch,
   transferInventory,
 } from "@/server/inventory/inventory-repository";
 
@@ -23,6 +25,7 @@ let warehouseId: string | undefined;
 let locationId: string | undefined;
 let secondLocationId: string | undefined;
 let shipmentId: string | undefined;
+let batchId: string | undefined;
 
 
 describeDatabase("inventory integrity", () => {
@@ -32,6 +35,10 @@ describeDatabase("inventory integrity", () => {
       await query("DELETE FROM inventory_movements WHERE product_id = $1", [productId]);
       await query("DELETE FROM inventory_receipts WHERE product_id = $1", [productId]);
       await query("DELETE FROM inventory_reservations WHERE product_id = $1", [productId]);
+      if (batchId) {
+        await query("DELETE FROM inventory_reservation_batches WHERE id = $1", [batchId]);
+        batchId = undefined;
+      }
       await query("DELETE FROM inventory_balances WHERE product_id = $1", [productId]);
       await query("DELETE FROM inventory_transfers WHERE product_id = $1", [productId]);
       if (shipmentId) {
@@ -287,5 +294,64 @@ describeDatabase("inventory integrity", () => {
       requestId: "inventory-integration",
     });
     expect(released.reservation?.status).toBe("released");
+
+    const batchIdempotencyKey = `reservation-batch-${randomUUID()}`;
+    const batch = await reserveInventoryBatch({
+      idempotencyKey: batchIdempotencyKey,
+      referenceType: "integration",
+      referenceId: productId,
+      reason: "Reserve two explicit locations",
+      lines: [
+        {
+          variantId,
+          locationId,
+          sourceSupplierId: null,
+          lineReference: null,
+          quantity: 1,
+        },
+        {
+          variantId,
+          locationId: secondLocationId,
+          sourceSupplierId: null,
+          lineReference: null,
+          quantity: 1,
+        },
+      ],
+      actorUserId: userId,
+      requestId: "inventory-integration-batch",
+    });
+    batchId = batch.batchId;
+    expect(batch.reservations).toHaveLength(2);
+    const batchReplay = await reserveInventoryBatch({
+      idempotencyKey: batchIdempotencyKey,
+      referenceType: "integration",
+      referenceId: productId,
+      reason: "Reserve two explicit locations",
+      lines: [
+        { variantId, locationId, sourceSupplierId: null, lineReference: null, quantity: 1 },
+        { variantId, locationId: secondLocationId, sourceSupplierId: null, lineReference: null, quantity: 1 },
+      ],
+      actorUserId: userId,
+      requestId: "inventory-integration-batch-replay",
+    });
+    expect(batchReplay.idempotentReplay).toBe(true);
+
+    const releaseBatchKey = `release-batch-${randomUUID()}`;
+    const releasedBatch = await releaseInventoryBatch({
+      batchId: batch.batchId,
+      idempotencyKey: releaseBatchKey,
+      reason: "Release explicit locations",
+      actorUserId: userId,
+      requestId: "inventory-integration-batch-release",
+    });
+    expect(releasedBatch.status).toBe("released");
+    const releasedBatchReplay = await releaseInventoryBatch({
+      batchId: batch.batchId,
+      idempotencyKey: releaseBatchKey,
+      reason: "Release explicit locations",
+      actorUserId: userId,
+      requestId: "inventory-integration-batch-release-replay",
+    });
+    expect(releasedBatchReplay.idempotentReplay).toBe(true);
   });
 });

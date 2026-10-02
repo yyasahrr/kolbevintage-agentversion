@@ -129,6 +129,33 @@ export const createOrderSchema = z.object({
   }
 });
 
+export const reserveOrderInventorySchema = z.object({
+  orderId: uuid,
+  idempotencyKey: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(1).max(1000),
+  lines: z.array(z.object({
+    orderItemId: uuid,
+    variantId: uuid,
+    locationId: uuid,
+    sourceSupplierId: uuid.nullable(),
+    quantity,
+  })).min(1).max(100),
+}).superRefine((input, context) => {
+  const itemIds = new Set<string>();
+  for (const line of input.lines) {
+    if (itemIds.has(line.orderItemId)) {
+      context.addIssue({ code: "custom", path: ["lines"], message: "Each order item may appear only once." });
+    }
+    itemIds.add(line.orderItemId);
+  }
+});
+
+export const releaseOrderInventorySchema = z.object({
+  orderId: uuid,
+  idempotencyKey: z.string().trim().min(1).max(200),
+  reason: z.string().trim().min(1).max(1000).nullable().optional(),
+});
+
 export const transitionOrderSchema = z.object({
   orderId: uuid,
   toStatus: orderStatusSchema,
@@ -139,6 +166,16 @@ export const transitionOrderSchema = z.object({
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema> & {
   buyerUserId: string;
+  actorUserId: string;
+  requestId: string;
+};
+
+export type ReserveOrderInventoryInput = z.infer<typeof reserveOrderInventorySchema> & {
+  actorUserId: string;
+  requestId: string;
+};
+
+export type ReleaseOrderInventoryInput = z.infer<typeof releaseOrderInventorySchema> & {
   actorUserId: string;
   requestId: string;
 };

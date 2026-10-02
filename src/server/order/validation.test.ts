@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createOrderSchema, transitionOrderSchema } from "@/server/order/validation";
+import {
+  createOrderSchema,
+  releaseOrderInventorySchema,
+  reserveOrderInventorySchema,
+  transitionOrderSchema,
+} from "@/server/order/validation";
 
 const ids = {
   productId: "11111111-1111-4111-8111-111111111111",
@@ -104,6 +109,47 @@ describe("order validation", () => {
       },
       idempotencyKey: "order-3",
       items: [{ ...item, discountMinor: 0, taxMinor: 0, lineTotalMinor: 10000 }],
+    }).success).toBe(true);
+  });
+
+  it("requires one explicit allocation for every order item", () => {
+    const base = {
+      orderId: ids.orderId,
+      idempotencyKey: "reserve-order-1",
+      reason: "Allocate order inventory",
+    };
+    expect(reserveOrderInventorySchema.safeParse({
+      ...base,
+      lines: [{
+        orderItemId: ids.orderId,
+        variantId: ids.variantId,
+        locationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        sourceSupplierId: null,
+        quantity: 1,
+      }, {
+        orderItemId: ids.orderId,
+        variantId: ids.variantId,
+        locationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        sourceSupplierId: null,
+        quantity: 1,
+      }],
+    }).success).toBe(false);
+    expect(reserveOrderInventorySchema.safeParse({
+      ...base,
+      lines: [{
+        orderItemId: ids.orderId,
+        variantId: ids.variantId,
+        locationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        sourceSupplierId: null,
+        quantity: 1,
+      }],
+    }).success).toBe(true);
+  });
+
+  it("validates an order-scoped release command", () => {
+    expect(releaseOrderInventorySchema.safeParse({
+      orderId: ids.orderId,
+      idempotencyKey: "release-order-1",
     }).success).toBe(true);
   });
 

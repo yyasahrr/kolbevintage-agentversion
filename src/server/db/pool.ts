@@ -39,7 +39,7 @@ export type DatabaseHealth =
   | { status: "not_configured"; detail: string }
   | { status: "unavailable"; detail: string };
 
-const latestMigrationVersion = "0013_pricing_foundation";
+const latestMigrationVersion = "0014_order_inventory_reservations";
 
 export async function checkDatabase(): Promise<DatabaseHealth> {
   let config: ReturnType<typeof getDatabaseConfig>;

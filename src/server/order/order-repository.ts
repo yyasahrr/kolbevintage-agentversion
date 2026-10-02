@@ -13,12 +13,21 @@ import { assertOrderTransition } from "@/server/order/order-state";
 import type { OrderStatus } from "@/server/order/order-state";
 import type {
   CreateOrderInput,
+  ReleaseOrderInventoryInput,
+  ReserveOrderInventoryInput,
   TransitionOrderInput,
   orderItemSnapshotSchema,
 } from "@/server/order/validation";
 import {
   quoteOrderPricingWithClient,
 } from "@/server/pricing/pricing-repository";
+import type {
+  InventoryReservationBatchResult,
+} from "@/server/inventory/inventory-repository";
+import {
+  releaseInventoryBatchWithClient,
+  reserveInventoryBatchWithClient,
+} from "@/server/inventory/inventory-repository";
 import type {
   PricingSnapshot,
   QuoteOrderPricingInput,
@@ -45,6 +54,8 @@ export type OrderRecord = {
   market: OrderMarket;
   wholesaleMembershipId: string | null;
   status: OrderStatus;
+  reservationStatus: "not_started" | "reserved" | "released";
+  reservationBatchId: string | null;
   currency: string;
   subtotalMinor: number;
   discountMinor: number;
@@ -91,6 +102,8 @@ type OrderRow = {
   market_type: OrderMarket;
   wholesale_membership_id: string | null;
   status: OrderStatus;
+  reservation_status: "not_started" | "reserved" | "released";
+  reservation_batch_id: string | null;
   currency: string;
   subtotal_minor: MoneyValue;
   discount_minor: MoneyValue;
@@ -283,6 +296,147 @@ async function createOrderWithClient(
     return { order, initialEvent: toOrderEvent(initialEvent), idempotentReplay: false };
 }
 
+export type ReserveOrderInventoryResult = {
+  order: OrderRecord;
+  batch: InventoryReservationBatchResult;
+  idempotentReplay: boolean;
+};
+
+export async function reserveOrderInventory(
+  input: ReserveOrderInventoryInput,
+): Promise<ReserveOrderInventoryResult> {
+  return withTransaction(async (client) => {
+    const storedOrder = await findOrderById(client, input.orderId, true);
+    if (!storedOrder) throw new OrderNotFoundError();
+    if (storedOrder.reservation_status === "released") throw new InvalidOrderStateError();
+    if (storedOrder.reservation_status === "reserved") {
+      if (!storedOrder.reservation_batch_id) throw new OrderIntegrityError();
+      const batchKey = await client.query<{ idempotency_key: string }>(
+        `SELECT idempotency_key
+           FROM inventory_reservation_batches
+          WHERE id = $1`,
+        [storedOrder.reservation_batch_id],
+      );
+      if (batchKey.rows[0]?.idempotency_key !== input.idempotencyKey) {
+        throw new OrderIdempotencyConflictError();
+      }
+    }
+
+    const itemResult = await client.query<OrderItemRow>(
+      `SELECT id, order_id, line_number, product_id, variant_id, quantity, line_total_minor, snapshot
+         FROM order_items
+        WHERE order_id = $1
+        ORDER BY line_number ASC`,
+      [storedOrder.id],
+    );
+    assertReservationPlanMatchesItems(input, itemResult.rows);
+
+    const batch = await reserveInventoryBatchWithClient(client, {
+      idempotencyKey: input.idempotencyKey,
+      referenceType: "order",
+      referenceId: storedOrder.id,
+      reason: input.reason,
+      actorUserId: input.actorUserId,
+      requestId: input.requestId,
+      lines: input.lines.map((line) => ({
+        variantId: line.variantId,
+        locationId: line.locationId,
+        sourceSupplierId: line.sourceSupplierId,
+        lineReference: line.orderItemId,
+        quantity: line.quantity,
+      })),
+    });
+
+    if (storedOrder.reservation_status === "reserved"
+      && storedOrder.reservation_batch_id !== batch.batchId) {
+      throw new OrderIntegrityError();
+    }
+    if (storedOrder.reservation_status === "not_started") {
+      await client.query(
+        `UPDATE orders
+            SET reservation_status = 'reserved', reservation_batch_id = $2, updated_at = now()
+          WHERE id = $1 AND reservation_status = 'not_started'`,
+        [storedOrder.id, batch.batchId],
+      );
+      await appendOrderAudit(client, {
+        actorUserId: input.actorUserId,
+        action: "order.inventory_reserved",
+        orderId: storedOrder.id,
+        requestId: input.requestId,
+        reason: input.reason,
+        afterState: { reservationStatus: "reserved", reservationBatchId: batch.batchId },
+      });
+    }
+
+    return {
+      order: await loadOrder(client, storedOrder.id),
+      batch,
+      idempotentReplay: batch.idempotentReplay,
+    };
+  });
+}
+
+export async function releaseOrderInventory(
+  input: ReleaseOrderInventoryInput,
+): Promise<ReserveOrderInventoryResult> {
+  return withTransaction(async (client) => {
+    const storedOrder = await findOrderById(client, input.orderId, true);
+    if (!storedOrder) throw new OrderNotFoundError();
+    if (!storedOrder.reservation_batch_id) throw new InvalidOrderStateError();
+    if (storedOrder.reservation_status === "not_started") throw new InvalidOrderStateError();
+
+    const batch = await releaseInventoryBatchWithClient(client, {
+      batchId: storedOrder.reservation_batch_id,
+      idempotencyKey: input.idempotencyKey,
+      reason: input.reason ?? "Order inventory released",
+      actorUserId: input.actorUserId,
+      requestId: input.requestId,
+    });
+    if (storedOrder.reservation_status === "reserved") {
+      await client.query(
+        `UPDATE orders
+            SET reservation_status = 'released', updated_at = now()
+          WHERE id = $1 AND reservation_status = 'reserved'`,
+        [storedOrder.id],
+      );
+      await appendOrderAudit(client, {
+        actorUserId: input.actorUserId,
+        action: "order.inventory_released",
+        orderId: storedOrder.id,
+        requestId: input.requestId,
+        reason: input.reason ?? "Order inventory released",
+        afterState: { reservationStatus: "released", reservationBatchId: storedOrder.reservation_batch_id },
+      });
+    }
+    return {
+      order: await loadOrder(client, storedOrder.id),
+      batch,
+      idempotentReplay: batch.idempotentReplay,
+    };
+  });
+}
+
+function assertReservationPlanMatchesItems(
+  input: ReserveOrderInventoryInput,
+  items: OrderItemRow[],
+): void {
+  if (items.length !== input.lines.length) throw new OrderIntegrityError();
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const seenItemIds = new Set<string>();
+  for (const line of input.lines) {
+    if (seenItemIds.has(line.orderItemId)) throw new OrderIntegrityError();
+    seenItemIds.add(line.orderItemId);
+    const item = itemsById.get(line.orderItemId);
+    if (!item
+      || item.order_id !== input.orderId
+      || item.variant_id !== line.variantId
+      || item.quantity !== line.quantity) {
+      throw new OrderIntegrityError();
+    }
+  }
+  if (seenItemIds.size !== items.length) throw new OrderIntegrityError();
+}
+
 export async function transitionOrder(input: TransitionOrderInput): Promise<TransitionOrderResult> {
   return withTransaction(async (client) => {
     const order = await findOrderById(client, input.orderId, true);
@@ -471,7 +625,8 @@ async function findOrderByIdempotencyKey(
 ): Promise<(OrderRow & { command_fingerprint: string }) | null> {
   const result = await client.query<OrderRow & { command_fingerprint: string }>(
     `SELECT id, order_number, buyer_user_id, market_type, wholesale_membership_id,
-            status, currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
+            status, reservation_status, reservation_batch_id,
+            currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
             total_minor, pricing_snapshot, snapshot_version, idempotency_key, command_fingerprint,
             created_at, updated_at
        FROM orders
@@ -486,7 +641,8 @@ async function findOrderByIdempotencyKey(
 async function findOrderById(client: PoolClient, orderId: string, lock: boolean): Promise<OrderRow | null> {
   const result = await client.query<OrderRow>(
     `SELECT id, order_number, buyer_user_id, market_type, wholesale_membership_id,
-            status, currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
+            status, reservation_status, reservation_batch_id,
+            currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
             total_minor, pricing_snapshot, snapshot_version, created_at, updated_at
        FROM orders
       WHERE id = $1
@@ -600,6 +756,8 @@ function toOrder(order: OrderRow, items: OrderItemRow[]): OrderRecord {
     market: order.market_type,
     wholesaleMembershipId: order.wholesale_membership_id,
     status: order.status,
+    reservationStatus: order.reservation_status,
+    reservationBatchId: order.reservation_batch_id,
     currency: order.currency,
     subtotalMinor: toSafeNumber(order.subtotal_minor),
     discountMinor: toSafeNumber(order.discount_minor),

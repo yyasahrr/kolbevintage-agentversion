@@ -10,7 +10,7 @@
 - Wholesale order creation requires the buyer's active, time-valid server-side membership and stores its membership identifier as an order snapshot reference.
 - Catalog and supplier public fields are revalidated server-side before an order is created. Supplier private fields are never copied into an order item snapshot.
 - Every creation and state transition has an idempotency key, an append-only event, and an audit record.
-- Inventory reservations, pricing calculation, payment authorization, shipping, and fulfillment provider calls are not faked by this foundation. Future checkout must call their explicit adapters/services before transitioning the order.
+- Inventory reservations are now connected only through an internal, explicit order allocation boundary; pricing calculation, payment authorization, shipping, and fulfillment provider calls are not faked by this foundation. Future checkout must call their explicit adapters/services before transitioning the order.
 
 ## Internal `createOrder`
 
@@ -27,6 +27,14 @@ The command contains:
 Creation always starts at `draft` and appends a `draft` event. Replaying the same key and identical command returns the original snapshot; reusing it with another buyer or command fingerprint returns a conflict.
 
 `createPricedOrder` is the stronger internal boundary: it calculates a versioned base-merchandise quote and creates the order in the same transaction. It currently records zero discount, tax, and shipping because those policies are not implemented; it does not reserve stock or authorize payment.
+
+## Internal inventory reservation boundary
+
+`reserveOrderInventory` accepts an order id and an explicit allocation plan. Each line must identify one persisted `orderItemId`, the matching variant and exact order quantity, an active warehouse `locationId`, and the explicit `sourceSupplierId` (or `null` for platform inventory). The service rejects missing, duplicate, mismatched, or extra order items before calling the inventory batch service.
+
+The order and inventory batch are coordinated in one PostgreSQL transaction. The order stores `reservationStatus` (`not_started`, `reserved`, or `released`) and `reservationBatchId`; the batch stores the order reference and all reservation lines. Replaying the same allocation idempotency key returns the same batch, while a changed plan conflicts. The batch acquires deterministic balance locks and does not auto-select a warehouse.
+
+`releaseOrderInventory` releases the referenced batch atomically and changes the order reservation lifecycle to `released`. Replaying the release key does not append new release movements. These are internal services only; there is no public checkout or customer-created reservation endpoint.
 
 ## Internal `transitionOrder`
 
@@ -47,7 +55,7 @@ cancelled -> terminal
 
 ## Database contract
 
-Migration `0012_order_foundation.sql` adds `orders`, `order_items`, and `order_events`. The current order row is a query projection; the event timeline is the audit history. Order and order-event rows use restrictive deletion behavior so business operations cannot silently remove historical order state.
+Migrations `0012_order_foundation.sql` and `0014_order_inventory_reservations.sql` add `orders`, `order_items`, `order_events`, order reservation lifecycle fields, reservation batches, and batch linkage. The current order row is a query projection; the event timeline is the audit history. Order, order-event, and reservation history use restrictive deletion behavior so business operations cannot silently remove historical state.
 
 ## Explicit next dependencies
 

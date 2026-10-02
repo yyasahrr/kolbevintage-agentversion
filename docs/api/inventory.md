@@ -1,6 +1,6 @@
 # Warehouse and Inventory API
 
-**Status:** Phase 4 inventory foundation. Inventory persistence and server-side movement services are implemented; receiving, QC, inbound shipment records, transfers, authorized adjustments, and holds are exposed for warehouse operations. Checkout, shipping, and customer-facing reservation routes remain intentionally out of scope.
+**Status:** Phase 4 inventory foundation. Inventory persistence and server-side movement services are implemented; receiving, QC, inbound shipment records, transfers, authorized adjustments, holds, and transactional multi-line reservation batches are available to authorized/internal services. Checkout, shipping, and customer-facing reservation routes remain intentionally out of scope.
 
 ## Invariants
 
@@ -10,6 +10,9 @@
 - Every balance mutation appends an immutable `inventory_movements` record with actor, reason/reference, idempotency key, and post-movement quantities.
 - Receipt quantities enter `unavailable` stock first and cannot become available until final QC.
 - Reservations lock the balance row in a transaction and calculate availability as `on hand - reserved - unavailable`.
+- A reservation batch carries an idempotency key and SHA-256 command fingerprint. Reusing its key with different references, reason, explicit lines, source, location, or quantity returns a conflict.
+- Batch lines must name their location and source supplier explicitly; no warehouse or supplier source is selected implicitly.
+- Batch balance locks are acquired in deterministic variant/location/source order. A failed line rolls back the entire batch, so no partial reservation remains.
 - Receive, reserve, adjustment, hold, and release commands are idempotent. Reusing a key with different command data returns a conflict.
 - Holds do not change on-hand quantity; they increase `unavailable_quantity`. Releasing a hold appends a compensating movement and returns that quantity to available stock.
 - PostgreSQL advisory transaction locks serialize creation and mutation of the same variant/location/source balance; row locks protect existing balances.
@@ -160,12 +163,14 @@ The shared server module provides `reserveInventory` and `releaseInventoryReserv
 - Concurrent reservations lock the same balance and cannot make available quantity negative.
 - `releaseInventoryReservation` only releases an active reservation and appends a compensating movement.
 - Repeated reservation commands return the original reservation; repeated release commands are idempotent by release key.
+- `reserveInventoryBatch` and `releaseInventoryBatch` are the multi-line internal boundaries. A batch has `active`/`released` lifecycle state and each reservation references the batch.
+- `reserveInventoryBatch` validates every explicit line and creates all movements/reservations in one transaction. `releaseInventoryBatch` locks and releases every line in one transaction.
 - `adjustInventory` appends a signed `adjust` movement under the same balance lock and rejects a negative correction that would consume reserved or unavailable units.
 - `placeInventoryHold` and `releaseInventoryHold` use `hold`/`release_hold` movements; holds are a warehouse control primitive and are not customer reservations.
 
 ## Database contract
 
-Migrations `0007_inventory.sql` through `0011_inventory_adjustments_holds.sql` add warehouses, locations, balance projections, append-oriented movements, reservations, inbound receipts/QC, shipment records, transfers, holds, owner/source triggers, indexes, audit metadata, and inventory permissions. Balances are projections protected by transactional movement writes; business code must not update them outside the inventory module.
+Migrations `0007_inventory.sql` through `0011_inventory_adjustments_holds.sql` add warehouses, locations, balance projections, append-oriented movements, reservations, inbound receipts/QC, shipment records, transfers, holds, owner/source triggers, indexes, audit metadata, and inventory permissions. Migration `0014_order_inventory_reservations.sql` adds the reservation-batch aggregate, batch linkage, and order reservation lifecycle fields. Balances are projections protected by transactional movement writes; business code must not update them outside the inventory module.
 
 ## Known limitations
 

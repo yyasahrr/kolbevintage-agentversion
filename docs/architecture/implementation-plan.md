@@ -98,6 +98,7 @@ Implemented:
 - Balance projections separated from append-oriented inventory movements.
 - Supplier-source integrity enforced by PostgreSQL trigger and repository checks.
 - Transactional receive, final QC, reserve, and release services with row/advisory locking.
+- Transactional multi-line reservation batches with explicit location/source allocations, deterministic balance lock ordering, batch fingerprint idempotency, and atomic release lifecycle.
 - Received units remain unavailable until an idempotent final QC split into accepted/rejected quantities.
 - Idempotent receive/QC/reserve/release command boundaries and bounded quantities.
 - Authorized warehouse receipt and QC APIs with `inventory:receive` and `inventory:qc` permissions.
@@ -105,7 +106,7 @@ Implemented:
 - Append-oriented, idempotent manual adjustments with bounded negative corrections.
 - Append-oriented holds and release transitions that consume and restore unavailable quantity without changing on-hand quantity.
 - Authorized adjustment and hold/release APIs with `inventory:adjust` and `inventory:hold` permissions.
-- Conditional integration coverage for idempotent receive/QC, shipment over-receiving rejection, transfers, reservations, holds, releases, and concurrent oversell prevention.
+- Conditional integration coverage for idempotent receive/QC, shipment over-receiving rejection, transfers, single-line reservations, multi-line reservation batches, atomic releases, holds, releases, and concurrent oversell prevention.
 
 Still required before inventory is production-ready:
 
@@ -128,7 +129,7 @@ Implemented:
 Still required before exposing checkout:
 
 - Deterministic pricing/discount service and provenance.
-- Inventory reservation integration and cancellation/expiry behavior.
+- Reservation cancellation/expiry behavior beyond the implemented internal order allocation/release boundaries.
 - Payment-provider adapter, authenticated/replay-protected callbacks, and finance boundaries.
 - Buyer/Wholesale/Admin order authorization and read projections.
 
@@ -145,8 +146,8 @@ Implemented:
 Still required before checkout:
 
 - Discounts/promotions, tax, shipping rates, and their provenance/versioning.
-- Multi-line inventory allocation and transactional reservation integration.
-- Payment-provider adapter/callback boundaries and finance ledger.
+- Reservation expiry/cancellation policy and payment-provider adapter/callback boundaries.
+- Finance ledger and checkout orchestration without bypassing the explicit allocation plan.
 
 ## 1. Delivery rules
 
@@ -263,7 +264,7 @@ Required tests:
 
 ### Phase 5 — Commerce and order state machines
 
-**Status:** Order snapshot/state-machine foundation started; checkout, pricing, reservation, and payment remain intentionally unimplemented.
+**Status:** Order snapshot/state-machine and internal explicit reservation foundation started; checkout, payment, and customer-facing order access remain intentionally unimplemented.
 
 **Dependencies:** Phase 3 catalog, Phase 4 inventory, Phase 1 identity/membership.
 

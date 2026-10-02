@@ -6,7 +6,9 @@ import {
   placeInventoryHoldSchema,
   receiveInventorySchema,
   releaseInventoryHoldSchema,
+  releaseInventoryBatchSchema,
   releaseInventorySchema,
+  reserveInventoryBatchSchema,
   reserveInventorySchema,
   transferInventorySchema,
 } from "@/server/inventory/validation";
@@ -64,6 +66,30 @@ describe("inventory validation", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("requires explicit, unique balances for a reservation batch", () => {
+    const result = reserveInventoryBatchSchema.safeParse({
+      idempotencyKey: "batch-1",
+      reason: "Order allocation",
+      lines: [
+        {
+          variantId: "11111111-1111-4111-8111-111111111111",
+          locationId: "22222222-2222-4222-8222-222222222222",
+          quantity: 2,
+        },
+        {
+          variantId: "11111111-1111-4111-8111-111111111111",
+          locationId: "22222222-2222-4222-8222-222222222222",
+          quantity: 1,
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    expect(releaseInventoryBatchSchema.safeParse({
+      batchId: "33333333-3333-4333-8333-333333333333",
+      idempotencyKey: "batch-release-1",
+    }).success).toBe(true);
   });
 
   it("requires UUID reservation identifiers for release", () => {
