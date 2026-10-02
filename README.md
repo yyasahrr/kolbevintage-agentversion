@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Discovery is complete; platform, identity, supplier/wholesale, and catalog foundations are in progress.** The repository now has a Next.js/TypeScript runtime, PostgreSQL migrations, authentication/session routes with database-backed abuse limits, baseline security headers, supplier application/review APIs, wholesale eligibility checks, seller-owned catalog/variant APIs, health/readiness checks, structured logging, tests, and CI quality gates. Inventory integrity now includes central warehouse receiving/QC, inbound shipments, transfers, adjustments, holds, and transactional reservations; complete warehouse administration, shipping/returns, finance, and commerce fulfillment flows are intentionally not implemented yet.
+**Discovery is complete; platform, identity, supplier/wholesale, and catalog foundations are in progress.** The repository now has a Next.js/TypeScript runtime, PostgreSQL migrations, authentication/session routes with database-backed abuse limits, baseline security headers, supplier application/review APIs, wholesale eligibility checks, seller-owned catalog/variant APIs, health/readiness checks, structured logging, tests, and CI quality gates. Inventory integrity now includes central warehouse receiving/QC, inbound shipments, transfers, adjustments, holds, and transactional reservations. A shared Retail/Wholesale order snapshot and state-machine foundation is also present; warehouse administration, shipping/returns, pricing, checkout/payment, finance, and commerce fulfillment flows are intentionally not implemented yet.
 
 ## Project documents
 
@@ -16,5 +16,6 @@
 - [Supplier and Wholesale API contract](docs/api/supplier-and-wholesale.md)
 - [Catalog API contract](docs/api/catalog.md)
 - [Warehouse and Inventory API contract](docs/api/inventory.md)
+- [Order foundation contract](docs/api/orders.md)
 
 Do not treat a feature as complete until its server-side business rules, authorization, data integrity, tests, and relevant UI/API flow are implemented and verified.

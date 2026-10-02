@@ -114,6 +114,24 @@ Still required before inventory is production-ready:
 - Movement retention/archival and operational monitoring policy.
 - Full PostgreSQL concurrency suite in CI with a real service and order/checkout references.
 
+### Order foundation — Started
+
+Implemented:
+
+- One shared Retail/Wholesale order model with market policy context rather than duplicate backends.
+- Immutable catalog/seller/quantity/money snapshots for order items with integer minor units and explicit currency.
+- Server-side validation of active product/variant snapshots and public Supplier fields; private Supplier fields are not copied into orders.
+- Wholesale order creation boundary that requires an active, time-valid membership belonging to the buyer.
+- Explicit order state machine: `draft`, `pending_payment`, `confirmed`, `processing`, `fulfilled`, and `cancelled`.
+- Transactional, idempotent order creation and state transitions with append-only event history and audit records.
+
+Still required before exposing checkout:
+
+- Deterministic pricing/discount service and provenance.
+- Inventory reservation integration and cancellation/expiry behavior.
+- Payment-provider adapter, authenticated/replay-protected callbacks, and finance boundaries.
+- Buyer/Wholesale/Admin order authorization and read projections.
+
 ## 1. Delivery rules
 
 1. Implement one modular monolith first; split a component only for a measured scaling, deployment, team, or fault-isolation reason.
@@ -228,6 +246,8 @@ Required tests:
 - Supplier cannot bypass central warehouse workflow.
 
 ### Phase 5 — Commerce and order state machines
+
+**Status:** Order snapshot/state-machine foundation started; checkout, pricing, reservation, and payment remain intentionally unimplemented.
 
 **Dependencies:** Phase 3 catalog, Phase 4 inventory, Phase 1 identity/membership.
 

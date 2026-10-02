@@ -1,5 +1,5 @@
 requirement_area,status,frontend,backend,database,tests,security,notes
-Shared platform core,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Runtime, PostgreSQL migrations, identity/access, supplier/wholesale, catalog/seller, initial inventory integrity, logging, errors, and tests exist; orders, finance, and complete warehouse workflows remain"
+Shared platform core,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Runtime, PostgreSQL migrations, identity/access, supplier/wholesale, catalog/seller, inventory integrity, shared order foundation, logging, errors, and tests exist; checkout, finance, and complete warehouse workflows remain"
 Authentication and sessions,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Registration/login/me/logout, scrypt hashes, hashed sessions, HMAC-keyed PostgreSQL auth rate limits, and production security headers; reset, verification, MFA, and recovery flows remain"
 RBAC and permissions,PARTIAL,MISSING,PARTIAL,PARTIAL,MISSING,PARTIAL,"Roles/permissions tables, seed vocabulary, and permission query helper exist; route middleware, ownership policy, and negative access suite are pending"
 Wholesale accounts and membership,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Wholesale account/plan/membership schema, active-window eligibility service, and server-guarded eligibility/public supplier routes; purchase, renewal, assignment UI, and billing are pending"
@@ -17,9 +17,9 @@ Inventory reservations and concurrency,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,P
 Inventory transfers/adjustments/holds,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Atomic paired warehouse transfer movements, authorized manual adjustments, and temporary hold/release movements use deterministic locking and idempotency; shipping, returns, hold expiry, and operational UI remain"
 Retail commerce,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No Retail storefront or platform-seller flow
 Wholesale commerce,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No Wholesale storefront, supplier listings, MOQ, or membership gate"
-Cart and checkout,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No cart, checkout, pricing snapshot, validation, or idempotency"
-Retail order lifecycle,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No Retail order state machine or timeline
-Wholesale order lifecycle,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No Wholesale order state machine or warehouse fulfillment states
+Cart and checkout,MISSING,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Order creation is an internal snapshot boundary only; no cart, public checkout, pricing service, reservation integration, or payment idempotency exists"
+Retail order lifecycle,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Shared order snapshot and auditable state machine support Retail market context; customer/order reads, pricing, reservations, checkout, payment, and fulfillment remain"
+Wholesale order lifecycle,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Shared order snapshot and server-validated active-membership gate support Wholesale market context; MOQ, customer/order reads, pricing, reservations, checkout, payment, and fulfillment remain"
 Payment integration,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No payment adapter, intent, callback, or webhook handling"
 Refunds and invoices,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No refund entity, partial refund logic, invoice, or history"
 Finance and accounting,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No transaction, receivable, payable, commission, or accounting references"
@@ -50,4 +50,4 @@ Accessibility and responsive UX,PARTIAL,PARTIAL,NA,NA,MISSING,NA,Minimal accessi
 Unit/integration/E2E testing,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Vitest unit/route tests plus conditional PostgreSQL identity, supplier/membership, catalog, auth-rate-limit, inventory receive/QC/shipment/transfer/adjustment/hold, idempotency, and concurrency tests exist; no Playwright E2E or complete security suite"
 CI/CD and dependency security,PARTIAL,NA,PARTIAL,NA,PARTIAL,PARTIAL,"GitHub Actions runs install, env validation, lint, typecheck, tests, npm audit, and build; migration-aware auth rate-limit schema is included; deployment pipeline remains pending"
 Deployment/secrets/backup/recovery,PARTIAL,NA,PARTIAL,MISSING,MISSING,PARTIAL,"Placeholder-only env contract, CI, PostgreSQL service, and Next standalone output exist; deployment, backup, restore, rollback, and recovery are pending"
-Documentation and ADRs,PARTIAL,NA,NA,NA,NA,PARTIAL,"Audit, feature matrix, implementation plan, inventory/authentication/supplier/wholesale/catalog API contracts, three ADRs, and inventory docs exist; domain/deployment runbooks remain pending"
+Documentation and ADRs,PARTIAL,NA,NA,NA,NA,PARTIAL,"Audit, feature matrix, implementation plan, inventory/order/authentication/supplier/wholesale/catalog API contracts, three ADRs, and domain docs exist; deployment runbooks remain pending"

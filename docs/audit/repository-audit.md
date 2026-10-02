@@ -24,7 +24,7 @@ Therefore:
 - There is no legacy business logic to preserve or refactor.
 - There is no production data or existing business API contract to migrate.
 - The runtime can now be started and validated, but readiness correctly remains `503` until a configured database has all migrations applied.
-- Identity, supplier/Wholesale, catalog, and inventory foundations are `PARTIAL`; orders, finance, and remaining business domains are still `MISSING`.
+- Identity, supplier/Wholesale, catalog, inventory, and order foundations are `PARTIAL`; checkout/payment, finance, and remaining business domains are still `MISSING`.
 - Catalog and seller-ownership boundaries are now exposed as bounded APIs; inventory, order, payment, and commerce fulfillment must not be exposed until their server-authoritative domain services exist.
 
 This is a repository-readiness finding, not evidence of a deployed security compromise. The absence of domain security controls remains a production blocker if business endpoints are launched without implementing them.
@@ -48,7 +48,7 @@ Observed baseline and current foundation:
 | Current application files | Foundation only | Next.js runtime and operational routes; no business modules |
 | Frontend manifest | Present | `package.json`, React, Next.js, TypeScript, and a minimal status page |
 | Backend/API foundation | Partial | `/api/health`, `/api/ready`, request IDs, errors, logging, and initial auth routes; no commerce API |
-| Database schema/migrations | Partial | PostgreSQL SQL migrations through catalog, auth security, and inventory foundations, migration runner, pool, and readiness check exist; order/finance schema is absent |
+| Database schema/migrations | Partial | PostgreSQL SQL migrations through catalog, auth security, inventory, and the initial order foundation, migration runner, pool, and readiness check exist; finance schema is absent |
 | Authentication/authorization | Partial | Registration/login/me/logout, scrypt hashes, sessions, HMAC-keyed database rate limits, production security headers, and seeded roles/permissions; reset/business middleware pending |
 | API contracts/routes | Partial | Foundation and versioned auth routes exist; no catalog/order contract or OpenAPI |
 | Tests | Partial | Vitest unit/route tests plus PostgreSQL integration test for CI; no business integration or E2E suite |
@@ -110,7 +110,7 @@ See [ADR-0001](../architecture/ADR-0001-modular-monolith-and-shared-core.md) for
 
 ## 4. Existing domains and capabilities
 
-The repository now contains partial identity, supplier onboarding, supplier privacy, Wholesale membership, catalog, and warehouse/inventory foundations. Order, finance, marketing, CMS, and retail intelligence domains are not implemented.
+The repository now contains partial identity, supplier onboarding, supplier privacy, Wholesale membership, catalog, warehouse/inventory, and order snapshot/state foundations. Checkout/payment, finance, marketing, CMS, and retail intelligence domains are not implemented.
 
 The full requirement matrix is maintained in [`feature-matrix.csv`](feature-matrix.csv). Foundation rows are marked `PARTIAL`; unstarted business-domain rows remain `MISSING`.
 
@@ -128,7 +128,7 @@ The following gaps prevent production implementation and must be addressed in de
 | GAP-003A | Wholesale membership and entitlement lifecycle | Phase 2 partial | Eligibility is server-evaluated and membership schema exists; plan purchase, renewal, suspension, assignment, and billing are not implemented | P0 |
 | GAP-004 | Catalog/product/variant/seller model | Phase 3 partial | Product/variant schema, platform/supplier ownership, market visibility, supplier-only Wholesale rule, and bounded read/write APIs exist; media, pricing, stock, and full integration tests remain | P0 |
 | GAP-005 | Warehouse or inventory ledger | Phase 4 partial | Central warehouse/location schema, source-owner constraints, append-oriented movements, inbound shipment/QC records, idempotent receive/reserve/release services, atomic paired transfers, authorized adjustments, and holds exist; shipping, returns, consumed reservations, hold expiry, and full integration coverage remain | P0 |
-| GAP-006 | Order/checkout/payment state machine | Missing | Commerce, idempotency, payment callbacks, and fulfillment do not exist | P0 |
+| GAP-006 | Order/checkout/payment state machine | Phase 5 partial | Shared Retail/Wholesale order snapshots, integer-minor-unit totals, membership-gated Wholesale creation, idempotent transitions, events, and audit records exist; checkout, pricing, reservations, payment callbacks, and fulfillment do not exist | P0 |
 | GAP-007 | Finance, wallet, settlement, refund, or withdrawal ledger | Missing | Supplier payable and platform money cannot be reconciled or audited | P0 |
 | GAP-008 | Validation/error/API contract conventions | Phase 1 partial | Request size, credential schemas, error envelope, and correlation exist; domain schemas, pagination, and authorization do not | P0 |
 | GAP-009 | Test harness or CI quality gate | Phase 1 partial | Unit/route tests, CI, and a PostgreSQL integration test exist; full business integration, E2E, and concurrency tests do not | P0 |
@@ -162,7 +162,7 @@ Severity reflects production impact if a platform were launched in the current s
 
 There is no legacy implementation debt to measure. The repository is still at project-initialization stage, although the Phase 0 runtime/tooling foundation is now present. The following are **readiness gaps**, not defects in existing code:
 
-1. Identity/access, supplier onboarding, wholesale membership, catalog, and initial inventory schema/migrations exist; full warehouse operations, orders, finance, and retention conventions are still missing.
+1. Identity/access, supplier onboarding, wholesale membership, catalog, inventory, and initial order schema/migrations exist; full warehouse operations, checkout/payment, finance, and retention conventions are still missing.
 2. No domain model, API versioning, business validation schemas, or complete authorization policy layer.
 3. Authentication/session foundation, HMAC-keyed rate limits, and baseline security headers exist; password recovery, rate-limit bucket retention/monitoring, and business ownership checks remain.
 4. PostgreSQL integration coverage is CI-only and conditional locally; no business fixtures or E2E harness exists.
@@ -207,7 +207,7 @@ CMS/blog + SEO + reports/analytics
 Hardening + E2E/security/concurrency + deployment/backup/recovery
 ```
 
-The first batches have established the repository/toolchain contract, PostgreSQL migration/access foundations, identity/session routes with database-backed abuse controls, baseline security headers, supplier application/review policy, membership eligibility, catalog/seller ownership contracts, secure media metadata boundaries, central-warehouse inventory receiving/QC, inbound shipment records, atomic transfers, adjustments, and holds. They intentionally did not start with a simulated checkout. The next batch should define shared order snapshots and state transitions before checkout; pricing, reservation, and provider boundaries must be explicit before any payment flow.
+The first batches have established the repository/toolchain contract, PostgreSQL migration/access foundations, identity/session routes with database-backed abuse controls, baseline security headers, supplier application/review policy, membership eligibility, catalog/seller ownership contracts, secure media metadata boundaries, central-warehouse inventory receiving/QC, inbound shipment records, atomic transfers, adjustments, holds, and the shared order snapshot/state foundation. They intentionally did not start with a simulated checkout. The next batch should define pricing and reservation/provider boundaries before any checkout or payment flow.
 
 ## 9. Skill selection plan
 
