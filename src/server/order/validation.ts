@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { OrderStatus } from "@/server/order/order-state";
+import { pricingSnapshotSchema } from "@/server/pricing/validation";
 
 const uuid = z.string().uuid();
 const moneyMinor = z.number().int().nonnegative().max(9_000_000_000_000);
@@ -59,6 +60,7 @@ export const createOrderSchema = z.object({
   discountMinor: moneyMinor,
   taxMinor: moneyMinor,
   totalMinor: moneyMinor,
+  pricingSnapshot: pricingSnapshotSchema,
   idempotencyKey: z.string().trim().min(1).max(200),
   items: z.array(orderItemSnapshotSchema).min(1).max(100),
 }).superRefine((order, context) => {
@@ -69,6 +71,42 @@ export const createOrderSchema = z.object({
       path: ["totalMinor"],
       message: "Total must equal subtotal minus discount plus tax plus shipping.",
     });
+  }
+  const pricing = order.pricingSnapshot;
+  if (pricing.market !== order.market
+    || pricing.currency !== order.currency
+    || pricing.subtotalMinor !== order.subtotalMinor
+    || pricing.discountMinor !== order.discountMinor
+    || pricing.taxMinor !== order.taxMinor
+    || pricing.shippingMinor !== order.shippingMinor
+    || pricing.totalMinor !== order.totalMinor) {
+    context.addIssue({
+      code: "custom",
+      path: ["pricingSnapshot"],
+      message: "Pricing snapshot totals must match the order totals.",
+    });
+  }
+  const priceByVariant = new Map(pricing.items.map((item) => [item.variantId, item]));
+  if (pricing.items.length !== order.items.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["pricingSnapshot", "items"],
+      message: "Pricing snapshot item count must match the order item count.",
+    });
+  }
+  for (const item of order.items) {
+    const pricedItem = priceByVariant.get(item.variantId);
+    if (!pricedItem
+      || pricedItem.quantity !== item.quantity
+      || pricedItem.unitPriceMinor !== item.unitPriceMinor
+      || pricedItem.lineTotalMinor !== item.lineTotalMinor) {
+      context.addIssue({
+        code: "custom",
+        path: ["pricingSnapshot"],
+        message: "Pricing snapshot items must match order item prices and quantities.",
+      });
+      break;
+    }
   }
   if ((order.market === "retail" && order.wholesaleMembershipId !== null && order.wholesaleMembershipId !== undefined)
     || (order.market === "wholesale" && !order.wholesaleMembershipId)) {

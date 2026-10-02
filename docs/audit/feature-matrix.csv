@@ -1,5 +1,5 @@
 requirement_area,status,frontend,backend,database,tests,security,notes
-Shared platform core,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Runtime, PostgreSQL migrations, identity/access, supplier/wholesale, catalog/seller, inventory integrity, shared order foundation, logging, errors, and tests exist; checkout, finance, and complete warehouse workflows remain"
+Shared platform core,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Runtime, PostgreSQL migrations, identity/access, supplier/wholesale, catalog/seller, inventory integrity, shared order and base-pricing foundations, logging, errors, and tests exist; checkout, finance, and complete warehouse workflows remain"
 Authentication and sessions,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Registration/login/me/logout, scrypt hashes, hashed sessions, HMAC-keyed PostgreSQL auth rate limits, and production security headers; reset, verification, MFA, and recovery flows remain"
 RBAC and permissions,PARTIAL,MISSING,PARTIAL,PARTIAL,MISSING,PARTIAL,"Roles/permissions tables, seed vocabulary, and permission query helper exist; route middleware, ownership policy, and negative access suite are pending"
 Wholesale accounts and membership,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Wholesale account/plan/membership schema, active-window eligibility service, and server-guarded eligibility/public supplier routes; purchase, renewal, assignment UI, and billing are pending"
@@ -26,7 +26,7 @@ Finance and accounting,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No trans
 Supplier wallet,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No wallet ledger or pending/available/held balances
 Supplier settlement,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No gross-minus-commission/returns settlement calculation or ledger
 Supplier withdrawal,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No request/review/payment/failure workflow or balance reservation
-Pricing engine,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No retail/wholesale/tiered/supplier price model or history
+Pricing engine,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Versioned shared Retail/Wholesale base variant prices, integer minor-unit currency values, deterministic base-merchandise quotes, and pricing provenance exist; discounts, tax, shipping, promotions, and checkout integration remain"
 Discounts and coupons,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No discount rules, coupon eligibility, usage limits, or snapshots"
 Festival and promotion engine,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,No campaign/rule/priority/stacking implementation
 CRM and customer profiles,MISSING,MISSING,MISSING,MISSING,MISSING,MISSING,"No profiles, tags, notes, activities, purchase history, or LTV"
@@ -50,4 +50,4 @@ Accessibility and responsive UX,PARTIAL,PARTIAL,NA,NA,MISSING,NA,Minimal accessi
 Unit/integration/E2E testing,PARTIAL,MISSING,PARTIAL,PARTIAL,PARTIAL,PARTIAL,"Vitest unit/route tests plus conditional PostgreSQL identity, supplier/membership, catalog, auth-rate-limit, inventory receive/QC/shipment/transfer/adjustment/hold, idempotency, and concurrency tests exist; no Playwright E2E or complete security suite"
 CI/CD and dependency security,PARTIAL,NA,PARTIAL,NA,PARTIAL,PARTIAL,"GitHub Actions runs install, env validation, lint, typecheck, tests, npm audit, and build; migration-aware auth rate-limit schema is included; deployment pipeline remains pending"
 Deployment/secrets/backup/recovery,PARTIAL,NA,PARTIAL,MISSING,MISSING,PARTIAL,"Placeholder-only env contract, CI, PostgreSQL service, and Next standalone output exist; deployment, backup, restore, rollback, and recovery are pending"
-Documentation and ADRs,PARTIAL,NA,NA,NA,NA,PARTIAL,"Audit, feature matrix, implementation plan, inventory/order/authentication/supplier/wholesale/catalog API contracts, three ADRs, and domain docs exist; deployment runbooks remain pending"
+Documentation and ADRs,PARTIAL,NA,NA,NA,NA,PARTIAL,"Audit, feature matrix, implementation plan, inventory/order/pricing/authentication/supplier/wholesale/catalog API contracts, three ADRs, and domain docs exist; deployment runbooks remain pending"

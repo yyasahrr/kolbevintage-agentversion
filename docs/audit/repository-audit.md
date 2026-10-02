@@ -110,7 +110,7 @@ See [ADR-0001](../architecture/ADR-0001-modular-monolith-and-shared-core.md) for
 
 ## 4. Existing domains and capabilities
 
-The repository now contains partial identity, supplier onboarding, supplier privacy, Wholesale membership, catalog, warehouse/inventory, and order snapshot/state foundations. Checkout/payment, finance, marketing, CMS, and retail intelligence domains are not implemented.
+The repository now contains partial identity, supplier onboarding, supplier privacy, Wholesale membership, catalog, warehouse/inventory, order snapshot/state, and base pricing foundations. Checkout/payment, discounts/tax/shipping pricing, finance, marketing, CMS, and retail intelligence domains are not implemented.
 
 The full requirement matrix is maintained in [`feature-matrix.csv`](feature-matrix.csv). Foundation rows are marked `PARTIAL`; unstarted business-domain rows remain `MISSING`.
 
@@ -126,7 +126,7 @@ The following gaps prevent production implementation and must be addressed in de
 | GAP-002 | Identity, session, RBAC, and ownership model | Phase 1 partial | Identity/session/schema foundation, database-backed HMAC-keyed auth rate limits, and security headers exist; reset, complete permissions, and business ownership checks remain | P0 |
 | GAP-003 | Supplier approval/privacy boundary | Phase 2 partial | Application state machine, review permission, approval, public projection, and owner isolation exist; documents, portal UI, exports, and full IDOR coverage remain | P0 |
 | GAP-003A | Wholesale membership and entitlement lifecycle | Phase 2 partial | Eligibility is server-evaluated and membership schema exists; plan purchase, renewal, suspension, assignment, and billing are not implemented | P0 |
-| GAP-004 | Catalog/product/variant/seller model | Phase 3 partial | Product/variant schema, platform/supplier ownership, market visibility, supplier-only Wholesale rule, and bounded read/write APIs exist; media, pricing, stock, and full integration tests remain | P0 |
+| GAP-004 | Catalog/product/variant/seller model | Phase 3 partial | Product/variant schema, platform/supplier ownership, market visibility, supplier-only Wholesale rule, bounded read/write APIs, and versioned base pricing exist; media, discounts/tax/shipping pricing, stock integration, and full integration tests remain | P0 |
 | GAP-005 | Warehouse or inventory ledger | Phase 4 partial | Central warehouse/location schema, source-owner constraints, append-oriented movements, inbound shipment/QC records, idempotent receive/reserve/release services, atomic paired transfers, authorized adjustments, and holds exist; shipping, returns, consumed reservations, hold expiry, and full integration coverage remain | P0 |
 | GAP-006 | Order/checkout/payment state machine | Phase 5 partial | Shared Retail/Wholesale order snapshots, integer-minor-unit totals, membership-gated Wholesale creation, idempotent transitions, events, and audit records exist; checkout, pricing, reservations, payment callbacks, and fulfillment do not exist | P0 |
 | GAP-007 | Finance, wallet, settlement, refund, or withdrawal ledger | Missing | Supplier payable and platform money cannot be reconciled or audited | P0 |
@@ -207,7 +207,7 @@ CMS/blog + SEO + reports/analytics
 Hardening + E2E/security/concurrency + deployment/backup/recovery
 ```
 
-The first batches have established the repository/toolchain contract, PostgreSQL migration/access foundations, identity/session routes with database-backed abuse controls, baseline security headers, supplier application/review policy, membership eligibility, catalog/seller ownership contracts, secure media metadata boundaries, central-warehouse inventory receiving/QC, inbound shipment records, atomic transfers, adjustments, holds, and the shared order snapshot/state foundation. They intentionally did not start with a simulated checkout. The next batch should define pricing and reservation/provider boundaries before any checkout or payment flow.
+The first batches have established the repository/toolchain contract, PostgreSQL migration/access foundations, identity/session routes with database-backed abuse controls, baseline security headers, supplier application/review policy, membership eligibility, catalog/seller ownership contracts, secure media metadata boundaries, central-warehouse inventory receiving/QC, inbound shipment records, atomic transfers, adjustments, holds, the shared order snapshot/state foundation, and versioned base pricing. They intentionally did not start with a simulated checkout. The next batch should define transactional multi-line reservation and provider boundaries before any checkout or payment flow.
 
 ## 9. Skill selection plan
 

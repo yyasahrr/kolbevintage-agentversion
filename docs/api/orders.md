@@ -26,6 +26,8 @@ The command contains:
 
 Creation always starts at `draft` and appends a `draft` event. Replaying the same key and identical command returns the original snapshot; reusing it with another buyer or command fingerprint returns a conflict.
 
+`createPricedOrder` is the stronger internal boundary: it calculates a versioned base-merchandise quote and creates the order in the same transaction. It currently records zero discount, tax, and shipping because those policies are not implemented; it does not reserve stock or authorize payment.
+
 ## Internal `transitionOrder`
 
 A transition locks the order row, checks the current state, validates the allowed transition, updates the current status projection, appends an `order_events` record, and writes an audit record in one transaction.
@@ -51,7 +53,7 @@ Migration `0012_order_foundation.sql` adds `orders`, `order_items`, and `order_e
 
 Before exposing checkout or payment routes, implement and connect:
 
-1. A deterministic Retail/Wholesale pricing service with price and discount provenance.
-2. Transactional inventory reservation references and cancellation/expiry behavior.
+1. Discount, tax, and shipping pricing policies with explicit provenance/versioning.
+2. Transactional multi-line inventory allocation/reservation references and cancellation/expiry behavior.
 3. Payment-provider adapters with authenticated, replay-protected, idempotent callbacks.
 4. Authorization and customer/order read projections with buyer, Wholesale, Supplier, warehouse, finance, and admin scopes.

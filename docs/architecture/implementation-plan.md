@@ -132,6 +132,22 @@ Still required before exposing checkout:
 - Payment-provider adapter, authenticated/replay-protected callbacks, and finance boundaries.
 - Buyer/Wholesale/Admin order authorization and read projections.
 
+### Pricing foundation — Started
+
+Implemented:
+
+- Versioned shared Retail/Wholesale variant prices with explicit currency and integer minor units.
+- Transactional price replacement with advisory locking, validity intervals, retained history, actor/reason audit, and `pricing:manage` role grants.
+- Deterministic base-merchandise quote service that records exact price IDs, quantities, market, currency, and evaluation time.
+- Server-side active Wholesale membership validation and seller/market availability checks during quoting.
+- Atomic `createPricedOrder` boundary that stores the pricing snapshot with the order without pretending to reserve inventory or complete payment.
+
+Still required before checkout:
+
+- Discounts/promotions, tax, shipping rates, and their provenance/versioning.
+- Multi-line inventory allocation and transactional reservation integration.
+- Payment-provider adapter/callback boundaries and finance ledger.
+
 ## 1. Delivery rules
 
 1. Implement one modular monolith first; split a component only for a measured scaling, deployment, team, or fault-isolation reason.
@@ -284,6 +300,8 @@ Required tests:
 - Financial records are append-only or have explicit reversal/adjustment records; no silent balance edits.
 
 ### Phase 7 — Pricing, discounts, coupons, and festivals
+
+**Status:** Versioned base pricing foundation started; discounts, tax, shipping, promotions, and checkout integration remain unimplemented.
 
 **Dependencies:** Phase 3 catalog, Phase 5 order snapshots, Phase 1 customer/membership context.
 

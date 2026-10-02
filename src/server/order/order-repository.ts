@@ -16,6 +16,13 @@ import type {
   TransitionOrderInput,
   orderItemSnapshotSchema,
 } from "@/server/order/validation";
+import {
+  quoteOrderPricingWithClient,
+} from "@/server/pricing/pricing-repository";
+import type {
+  PricingSnapshot,
+  QuoteOrderPricingInput,
+} from "@/server/pricing/validation";
 import type { z } from "zod";
 
 export type OrderMarket = "retail" | "wholesale";
@@ -44,6 +51,7 @@ export type OrderRecord = {
   taxMinor: number;
   shippingMinor: number;
   totalMinor: number;
+  pricingSnapshot: PricingSnapshot;
   snapshotVersion: number;
   items: OrderItemRecord[];
   createdAt: string;
@@ -89,6 +97,7 @@ type OrderRow = {
   tax_minor: MoneyValue;
   shipping_minor: MoneyValue;
   total_minor: MoneyValue;
+  pricing_snapshot: PricingSnapshot;
   snapshot_version: number;
   created_at: Date;
   updated_at: Date;
@@ -134,8 +143,56 @@ type CatalogSnapshotRow = {
 };
 
 export async function createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
+  return withTransaction((client) => createOrderWithClient(client, input));
+}
+
+export type CreatePricedOrderInput = QuoteOrderPricingInput & {
+  idempotencyKey: string;
+  actorUserId: string;
+  requestId: string;
+};
+
+export async function createPricedOrder(input: CreatePricedOrderInput): Promise<CreateOrderResult> {
   return withTransaction(async (client) => {
-    const commandFingerprint = fingerprintCreateCommand(input);
+    const existing = await findOrderByIdempotencyKey(client, input.idempotencyKey, true);
+    if (existing) {
+      const order = await loadOrder(client, existing.id);
+      assertPricedReplayMatches(order, input);
+      const initialEvent = await findOrderEventByKey(client, existing.id, input.idempotencyKey);
+      if (!initialEvent) throw new OrderIntegrityError();
+      return { order, initialEvent: toOrderEvent(initialEvent), idempotentReplay: true };
+    }
+    const quote = await quoteOrderPricingWithClient(client, {
+      buyerUserId: input.buyerUserId,
+      market: input.market,
+      wholesaleMembershipId: input.wholesaleMembershipId ?? null,
+      currency: input.currency,
+      items: input.items,
+    });
+    return createOrderWithClient(client, {
+      buyerUserId: input.buyerUserId,
+      actorUserId: input.actorUserId,
+      requestId: input.requestId,
+      market: input.market,
+      wholesaleMembershipId: input.wholesaleMembershipId ?? null,
+      currency: input.currency,
+      shippingMinor: quote.snapshot.shippingMinor,
+      subtotalMinor: quote.snapshot.subtotalMinor,
+      discountMinor: quote.snapshot.discountMinor,
+      taxMinor: quote.snapshot.taxMinor,
+      totalMinor: quote.snapshot.totalMinor,
+      pricingSnapshot: quote.snapshot,
+      idempotencyKey: input.idempotencyKey,
+      items: quote.items,
+    });
+  });
+}
+
+async function createOrderWithClient(
+  client: PoolClient,
+  input: CreateOrderInput,
+): Promise<CreateOrderResult> {
+  const commandFingerprint = fingerprintCreateCommand(input);
     const existing = await findOrderByIdempotencyKey(client, input.idempotencyKey, true);
     if (existing) {
       if (existing.buyer_user_id !== input.buyerUserId
@@ -162,14 +219,13 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     }
 
     const orderId = randomUUID();
-    const now = new Date();
     const orderNumber = `KV-${orderId.replaceAll("-", "").slice(0, 16).toUpperCase()}`;
     await client.query(
       `INSERT INTO orders
          (id, order_number, buyer_user_id, market_type, wholesale_membership_id,
           status, currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
-          total_minor, snapshot_version, idempotency_key, command_fingerprint)
-       VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11, 1, $12, $13)`,
+          total_minor, pricing_snapshot, snapshot_version, idempotency_key, command_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9, $10, $11, $12::jsonb, 1, $13, $14)`,
       [
         orderId,
         orderNumber,
@@ -182,6 +238,7 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
         input.taxMinor,
         input.shippingMinor,
         input.totalMinor,
+        JSON.stringify(input.pricingSnapshot),
         input.idempotencyKey,
         commandFingerprint,
       ],
@@ -224,7 +281,6 @@ export async function createOrder(input: CreateOrderInput): Promise<CreateOrderR
     });
 
     return { order, initialEvent: toOrderEvent(initialEvent), idempotentReplay: false };
-  });
 }
 
 export async function transitionOrder(input: TransitionOrderInput): Promise<TransitionOrderResult> {
@@ -356,13 +412,38 @@ function assertOrderTotals(input: CreateOrderInput): void {
   const tax = input.items.reduce((sum, item) => sum + item.taxMinor, 0);
   const itemTotal = input.items.reduce((sum, item) => sum + item.lineTotalMinor, 0);
   const total = input.subtotalMinor - input.discountMinor + input.taxMinor + input.shippingMinor;
+  const pricing = input.pricingSnapshot;
   if (![subtotal, discount, tax, itemTotal, total].every(Number.isSafeInteger)
     || subtotal !== input.subtotalMinor
     || discount !== input.discountMinor
     || tax !== input.taxMinor
     || itemTotal + input.shippingMinor !== input.totalMinor
-    || total !== input.totalMinor) {
+    || total !== input.totalMinor
+    || pricing.market !== input.market
+    || pricing.currency !== input.currency
+    || pricing.subtotalMinor !== input.subtotalMinor
+    || pricing.discountMinor !== input.discountMinor
+    || pricing.taxMinor !== input.taxMinor
+    || pricing.shippingMinor !== input.shippingMinor
+    || pricing.totalMinor !== input.totalMinor) {
     throw new OrderIntegrityError();
+  }
+}
+
+function assertPricedReplayMatches(order: OrderRecord, input: CreatePricedOrderInput): void {
+  if (order.buyerUserId !== input.buyerUserId
+    || order.market !== input.market
+    || order.currency !== input.currency
+    || order.wholesaleMembershipId !== (input.wholesaleMembershipId ?? null)
+    || order.items.length !== input.items.length) {
+    throw new OrderIdempotencyConflictError();
+  }
+  for (const requestedItem of input.items) {
+    const orderItem = order.items.find((item) => item.productId === requestedItem.productId
+      && item.variantId === requestedItem.variantId);
+    if (!orderItem || orderItem.quantity !== requestedItem.quantity) {
+      throw new OrderIdempotencyConflictError();
+    }
   }
 }
 
@@ -391,7 +472,7 @@ async function findOrderByIdempotencyKey(
   const result = await client.query<OrderRow & { command_fingerprint: string }>(
     `SELECT id, order_number, buyer_user_id, market_type, wholesale_membership_id,
             status, currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
-            total_minor, snapshot_version, idempotency_key, command_fingerprint,
+            total_minor, pricing_snapshot, snapshot_version, idempotency_key, command_fingerprint,
             created_at, updated_at
        FROM orders
       WHERE idempotency_key = $1
@@ -406,7 +487,7 @@ async function findOrderById(client: PoolClient, orderId: string, lock: boolean)
   const result = await client.query<OrderRow>(
     `SELECT id, order_number, buyer_user_id, market_type, wholesale_membership_id,
             status, currency, subtotal_minor, discount_minor, tax_minor, shipping_minor,
-            total_minor, snapshot_version, created_at, updated_at
+            total_minor, pricing_snapshot, snapshot_version, created_at, updated_at
        FROM orders
       WHERE id = $1
       LIMIT 1
@@ -525,6 +606,7 @@ function toOrder(order: OrderRow, items: OrderItemRow[]): OrderRecord {
     taxMinor: toSafeNumber(order.tax_minor),
     shippingMinor: toSafeNumber(order.shipping_minor),
     totalMinor: toSafeNumber(order.total_minor),
+    pricingSnapshot: order.pricing_snapshot,
     snapshotVersion: order.snapshot_version,
     items: items.map((item) => ({
       id: item.id,
