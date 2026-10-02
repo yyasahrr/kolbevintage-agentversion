@@ -1,8 +1,118 @@
 # Dependency-Aware Implementation Plan
 
-**Status:** Discovery complete; implementation not started
+**Status:** Discovery complete; Phase 0 complete; Identity/Supplier/Wholesale/Catalog foundations in progress; inventory foundation now includes receiving/QC, transfers, adjustments, and holds.
 **Source:** `docs/audit/repository-audit.md` and the project business invariants
 **Principle:** Smallest correct change, shared core, server-authoritative business rules.
+
+## Current progress
+
+### Phase 0 — Complete
+
+Implemented:
+
+- Next.js 16 / React 19 / TypeScript 5.9 runtime.
+- npm lockfile and Node 22 runtime contract.
+- `.env.example` plus placeholder-only environment validation.
+- Strict typecheck, ESLint, Vitest, production build, and GitHub Actions quality gates.
+- `GET /api/health` liveness endpoint.
+- `GET /api/ready` readiness endpoint that correctly returns `503` until persistence exists.
+- Structured redacted logging and request-correlation IDs.
+- Stable no-store HTTP error response primitive.
+- Minimal accessible foundation status page.
+
+### Identity foundation — Partial
+
+Implemented:
+
+- PostgreSQL connection pool and environment validation.
+- Transaction helper and ordered SQL migration runner.
+- Identity schema for users, sessions, roles, permissions, role assignments, and audit records.
+- Seeded initial system role/permission vocabulary.
+- Scrypt password hashing with bounded verification parameters.
+- HttpOnly SameSite session cookies with hashed server-side tokens.
+- `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and idempotent `POST /api/v1/auth/logout`.
+- Database-backed identity integration test, executed when PostgreSQL is available in CI.
+- Database-backed login/registration rate-limit buckets keyed by HMACs of email and network identifiers.
+- Authentication rate-limit responses include `429`, `Retry-After`, and a bounded retry duration.
+- Security headers are applied by the Next.js 16 `proxy` boundary; HSTS is production-only.
+- Readiness now requires the latest database migration to be applied; an unmigrated database remains `503`.
+
+Still required before identity is production-ready:
+
+- Password reset/email or OTP verification policy.
+- Password reset/email or OTP verification policy and account recovery abuse controls.
+- Complete permission middleware and resource ownership helpers on business APIs.
+- Full audit-log service and actor/metadata coverage for sensitive operations.
+- Verified CI PostgreSQL integration run and a local documented restore/test workflow.
+
+### Supplier and Wholesale foundation — Partial
+
+Implemented:
+
+- Wholesale account, plan, membership, and entitlement schema.
+- Supplier application state machine and append-only transition events.
+- Supplier application create/list/detail/submit APIs.
+- Permission-protected admin review list and decision API.
+- Supplier account creation on approval, supplier role assignment, and private profile persistence.
+- Buyer-safe public supplier projection that never joins private supplier fields.
+- Active membership window evaluation and Wholesale eligibility API.
+- Wholesale supplier public-profile API requiring an active membership.
+- Conditional PostgreSQL integration coverage for supplier owner isolation, approval, privacy projection, and membership eligibility.
+
+Still required before this foundation is production-ready:
+
+- Supplier document upload/storage validation and review UI.
+- Membership plan management, purchase/payment flow, renewal, suspension, and admin assignment UI.
+- Full ownership/IDOR security suite including exports and report paths.
+- Supplier and Admin portal UI with permission-aware actions.
+
+### Catalog foundation — Partial
+
+Implemented:
+
+- Shared product, variant, category, media, and product-event schema.
+- Explicit platform/supplier seller ownership with database constraints.
+- Supplier Retail prohibition enforced in request policy and database constraint.
+- Extensible product/variant fashion attributes and globally unique SKU/barcode constraints.
+- Draft/active/suspended/archived product state machine.
+- Supplier product create/list/publish APIs with approved-supplier and permission checks.
+- Platform Admin product create/publish APIs with catalog permissions.
+- Bounded Retail and Wholesale catalog list/detail APIs.
+- Wholesale catalog requires active server-side membership; Retail catalog only returns platform-owned products.
+- Public product DTO with public-only supplier projection.
+
+Still required before catalog is production-ready:
+
+- Category management and catalog administration UI.
+- Provider-backed secure media upload/storage, binary content scanning, thumbnails, signed access, and retention; bounded MIME/checksum metadata validation and storage-key hardening are present.
+- Pricing, price history, stock, inventory availability, and reservation integration.
+- Full PostgreSQL catalog integration suite in CI, search/filter contracts, and E2E coverage; a conditional ownership/visibility integration test is included and skips when no `DATABASE_URL` is configured locally.
+
+Do not expose checkout or finance endpoints until these catalog ownership, inventory, and policy boundaries are connected to their domain services.
+
+### Inventory foundation — Partial
+
+Implemented:
+
+- Central warehouses and active locations with server-side ownership checks.
+- Balance projections separated from append-oriented inventory movements.
+- Supplier-source integrity enforced by PostgreSQL trigger and repository checks.
+- Transactional receive, final QC, reserve, and release services with row/advisory locking.
+- Received units remain unavailable until an idempotent final QC split into accepted/rejected quantities.
+- Idempotent receive/QC/reserve/release command boundaries and bounded quantities.
+- Authorized warehouse receipt and QC APIs with `inventory:receive` and `inventory:qc` permissions.
+- Inbound shipment records linked to receipts/QC and atomic paired warehouse transfers.
+- Append-oriented, idempotent manual adjustments with bounded negative corrections.
+- Append-oriented holds and release transitions that consume and restore unavailable quantity without changing on-hand quantity.
+- Authorized adjustment and hold/release APIs with `inventory:adjust` and `inventory:hold` permissions.
+- Conditional integration coverage for idempotent receive/QC, shipment over-receiving rejection, transfers, reservations, holds, releases, and concurrent oversell prevention.
+
+Still required before inventory is production-ready:
+
+- Shipping, returns, consumed reservations, hold expiry policy, and warehouse/location administration UI.
+- Warehouse/location administration and operator UI.
+- Movement retention/archival and operational monitoring policy.
+- Full PostgreSQL concurrency suite in CI with a real service and order/checkout references.
 
 ## 1. Delivery rules
 
@@ -95,6 +205,8 @@ Required tests:
 
 ### Phase 4 — Warehouse and inventory integrity
 
+**Status:** Partial foundation implemented.
+
 **Dependencies:** Phase 2 supplier workflow and Phase 3 SKU model.
 
 Deliverables:
@@ -105,6 +217,8 @@ Deliverables:
 - Transactional reservation/release and idempotent commands.
 - Central warehouse workflow for supplier inventory before wholesale fulfillment.
 - Simple role-specific warehouse UI after APIs are proven.
+
+Implemented in the current foundation: warehouses/locations, balance projections, movement and reservation persistence, source-owner database triggers, receive/reserve/release services, and the authorized warehouse receipt endpoint. Remaining concepts must not be approximated by direct balance updates.
 
 Required tests:
 
